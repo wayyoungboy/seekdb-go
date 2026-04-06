@@ -72,10 +72,51 @@ func buildMetadataFilter(where map[string]interface{}) (string, []interface{}) {
 	var args []interface{}
 
 	for key, value := range where {
-		clause, clauseArgs := buildCondition("metadata", key, value)
-		if clause != "" {
-			clauses = append(clauses, clause)
-			args = append(args, clauseArgs...)
+		// Handle logical operators at top level
+		switch key {
+		case "$and":
+			if arr, ok := value.([]map[string]interface{}); ok {
+				var andClauses []string
+				for _, cond := range arr {
+					subClause, subArgs := buildMetadataFilter(cond)
+					if subClause != "" {
+						andClauses = append(andClauses, subClause)
+						args = append(args, subArgs...)
+					}
+				}
+				if len(andClauses) > 0 {
+					clauses = append(clauses, fmt.Sprintf("(%s)", strings.Join(andClauses, " AND ")))
+				}
+			}
+		case "$or":
+			if arr, ok := value.([]map[string]interface{}); ok {
+				var orClauses []string
+				for _, cond := range arr {
+					subClause, subArgs := buildMetadataFilter(cond)
+					if subClause != "" {
+						orClauses = append(orClauses, subClause)
+						args = append(args, subArgs...)
+					}
+				}
+				if len(orClauses) > 0 {
+					clauses = append(clauses, fmt.Sprintf("(%s)", strings.Join(orClauses, " OR ")))
+				}
+			}
+		case "$not":
+			if nested, ok := value.(map[string]interface{}); ok {
+				subClause, subArgs := buildMetadataFilter(nested)
+				if subClause != "" {
+					clauses = append(clauses, fmt.Sprintf("NOT (%s)", subClause))
+					args = append(args, subArgs...)
+				}
+			}
+		default:
+			// Regular field condition
+			clause, clauseArgs := buildCondition("metadata", key, value)
+			if clause != "" {
+				clauses = append(clauses, clause)
+				args = append(args, clauseArgs...)
+			}
 		}
 	}
 
@@ -98,11 +139,21 @@ func buildDocumentFilter(whereDocument map[string]interface{}) (string, []interf
 	for op, value := range whereDocument {
 		switch op {
 		case "$contains":
-			clauses = append(clauses, "document LIKE ?")
-			args = append(args, fmt.Sprintf("%%%v%%", value))
+			// Use MATCH AGAINST for full-text search (better performance)
+			clauses = append(clauses, "MATCH(document) AGAINST(? IN NATURAL LANGUAGE MODE)")
+			args = append(args, value)
 		case "$regex":
 			clauses = append(clauses, "document REGEXP ?")
 			args = append(args, value)
+		case "$not":
+			// Handle $not for document filters
+			if nested, ok := value.(map[string]interface{}); ok {
+				subClause, subArgs := buildDocumentFilter(nested)
+				if subClause != "" {
+					clauses = append(clauses, fmt.Sprintf("NOT (%s)", subClause))
+					args = append(args, subArgs...)
+				}
+			}
 		}
 	}
 
@@ -168,6 +219,15 @@ func buildOperatorCondition(column, key string, condition map[string]interface{}
 					args = append(args, v)
 				}
 				clauses = append(clauses, fmt.Sprintf("%s NOT IN (%s)", jsonPath, strings.Join(placeholders, ", ")))
+			}
+		case "$not":
+			// Handle $not for metadata field
+			if nested, ok := val.(map[string]interface{}); ok {
+				subClause, subArgs := buildOperatorCondition(column, key, nested)
+				if subClause != "" {
+					clauses = append(clauses, fmt.Sprintf("NOT (%s)", subClause))
+					args = append(args, subArgs...)
+				}
 			}
 		}
 	}

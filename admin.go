@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"sync"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -12,68 +13,87 @@ import (
 // AdminClient provides database management operations for seekdb.
 // It supports both embedded mode (Linux) and server mode (all platforms).
 type AdminClient struct {
-	config AdminConfig
-	db     *sql.DB
+	config    AdminConfig
+	db        *sql.DB
+	connOnce  sync.Once
+	connErr   error
+	connected bool
 }
 
 // NewAdminClient creates a new AdminClient with the given configuration.
-// The client automatically selects the appropriate connection mode based on the config:
-// - If Path is set: embedded mode (Linux only)
-// - If Host is set: server mode (all platforms)
+// The connection is lazily initialized on first use.
 func NewAdminClient(config AdminConfig) (*AdminClient, error) {
-	if config.Path != "" {
-		// Embedded mode - Linux only
-		return newEmbeddedAdminClient(config)
+	if config.Path == "" && config.Host == "" {
+		return nil, ErrInvalidConfig
 	}
-	if config.Host != "" {
-		// Server mode
-		return newServerAdminClient(config)
-	}
-	return nil, ErrInvalidConfig
+	return &AdminClient{config: config}, nil
 }
 
-// newEmbeddedAdminClient creates an AdminClient for embedded mode.
-func newEmbeddedAdminClient(config AdminConfig) (*AdminClient, error) {
-	// TODO: Implement embedded mode connection
-	// This requires bundling seekdb binary for Linux
-	return nil, ErrEmbeddedNotSupported
+// ensureConnection lazily initializes the connection.
+func (a *AdminClient) ensureConnection() error {
+	a.connOnce.Do(func() {
+		if a.config.Path != "" {
+			// Embedded mode - Linux only
+			a.connErr = ErrEmbeddedNotSupported
+			return
+		}
+		if a.config.Host != "" {
+			a.connErr = a.connectServer()
+			if a.connErr == nil {
+				a.connected = true
+			}
+		}
+	})
+	return a.connErr
 }
 
-// newServerAdminClient creates an AdminClient for server mode.
-func newServerAdminClient(config AdminConfig) (*AdminClient, error) {
-	password := config.Password
+// connectServer establishes the server connection.
+func (a *AdminClient) connectServer() error {
+	password := a.config.Password
 	if password == "" {
 		password = os.Getenv("SEEKDB_PASSWORD")
 	}
 
-	port := config.Port
+	port := a.config.Port
 	if port == 0 {
 		port = 2881
 	}
 
-	user := config.User
+	user := a.config.User
 	if user == "" {
 		user = "root"
 	}
 
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/", user, password, config.Host, port)
-	if config.Tenant != "" {
-		dsn = fmt.Sprintf("%s:%s@tcp(%s:%d)/?tenant=%s", user, password, config.Host, port, config.Tenant)
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/", user, password, a.config.Host, port)
+	if a.config.Tenant != "" {
+		dsn = fmt.Sprintf("%s:%s@tcp(%s:%d)/?tenant=%s", user, password, a.config.Host, port, a.config.Tenant)
 	}
 
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open connection: %w", err)
+		return fmt.Errorf("failed to open connection: %w", err)
+	}
+
+	// Apply pool configuration
+	poolConfig := a.config.PoolConfig
+	if poolConfig.MaxOpenConns == 0 {
+		poolConfig = DefaultConnectionPoolConfig()
+	}
+	db.SetMaxOpenConns(poolConfig.MaxOpenConns)
+	db.SetMaxIdleConns(poolConfig.MaxIdleConns)
+	if poolConfig.ConnMaxLifetime > 0 {
+		db.SetConnMaxLifetime(poolConfig.ConnMaxLifetime)
+	}
+	if poolConfig.ConnMaxIdleTime > 0 {
+		db.SetConnMaxIdleTime(poolConfig.ConnMaxIdleTime)
 	}
 
 	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return fmt.Errorf("failed to connect: %w", err)
 	}
 
-	return &AdminClient{
-		config: config,
-		db:     db,
-	}, nil
+	a.db = db
+	return nil
 }
 
 // Close closes the AdminClient connection.
@@ -86,6 +106,9 @@ func (a *AdminClient) Close() error {
 
 // CreateDatabase creates a new database with the given name.
 func (a *AdminClient) CreateDatabase(ctx context.Context, name string) error {
+	if err := a.ensureConnection(); err != nil {
+		return err
+	}
 	if name == "" {
 		return ErrDatabaseNameEmpty
 	}
@@ -100,6 +123,9 @@ func (a *AdminClient) CreateDatabase(ctx context.Context, name string) error {
 
 // GetDatabase retrieves information about a specific database.
 func (a *AdminClient) GetDatabase(ctx context.Context, name string) (*DatabaseInfo, error) {
+	if err := a.ensureConnection(); err != nil {
+		return nil, err
+	}
 	if name == "" {
 		return nil, ErrDatabaseNameEmpty
 	}
@@ -121,6 +147,9 @@ func (a *AdminClient) GetDatabase(ctx context.Context, name string) (*DatabaseIn
 
 // ListDatabases retrieves a paginated list of databases.
 func (a *AdminClient) ListDatabases(ctx context.Context, limit, offset int) ([]DatabaseInfo, error) {
+	if err := a.ensureConnection(); err != nil {
+		return nil, err
+	}
 	query := "SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA ORDER BY SCHEMA_NAME LIMIT ? OFFSET ?"
 	rows, err := a.db.QueryContext(ctx, query, limit, offset)
 	if err != nil {
@@ -142,6 +171,9 @@ func (a *AdminClient) ListDatabases(ctx context.Context, limit, offset int) ([]D
 
 // DeleteDatabase deletes a database with the given name.
 func (a *AdminClient) DeleteDatabase(ctx context.Context, name string) error {
+	if err := a.ensureConnection(); err != nil {
+		return err
+	}
 	if name == "" {
 		return ErrDatabaseNameEmpty
 	}

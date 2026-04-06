@@ -13,6 +13,10 @@ A Go SDK for OceanBase seekdb, an AI-native search database that unifies relatio
 - **Multiple Embedding Providers** - OpenAI, Azure, Cohere, HuggingFace, Qwen, DeepSeek, Jina AI
 - **Collection Management** - Create, update, delete, and fork collections
 - **Filter Support** - Rich filtering with metadata and document filters
+- **Include Options** - Control which fields are returned in queries
+- **QueryTexts** - Auto-embed text queries when using embedding functions
+- **Lazy Connection** - Connections are established on first use
+- **Environment Variables** - Configure via environment variables
 - **Type-Safe** - Full Go type safety with idiomatic API design
 
 ## Installation

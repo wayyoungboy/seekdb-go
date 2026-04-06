@@ -1,6 +1,9 @@
 package seekdb
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Common errors returned by the seekdb SDK.
 var (
@@ -38,13 +41,24 @@ type SeekdbError struct {
 	Code    int
 	Message string
 	Details string
+	Cause   error // Underlying error
 }
 
 func (e *SeekdbError) Error() string {
+	if e.Details != "" && e.Cause != nil {
+		return fmt.Sprintf("%s: %s (caused by: %v)", e.Message, e.Details, e.Cause)
+	}
 	if e.Details != "" {
 		return e.Message + ": " + e.Details
 	}
+	if e.Cause != nil {
+		return fmt.Sprintf("%s (caused by: %v)", e.Message, e.Cause)
+	}
 	return e.Message
+}
+
+func (e *SeekdbError) Unwrap() error {
+	return e.Cause
 }
 
 // NewSeekdbError creates a new SeekdbError.
@@ -54,4 +68,35 @@ func NewSeekdbError(code int, message, details string) *SeekdbError {
 		Message: message,
 		Details: details,
 	}
+}
+
+// WrapError wraps an existing error with additional context.
+func WrapError(err error, message string) error {
+	return fmt.Errorf("%s: %w", message, err)
+}
+
+// WrapErrorf wraps an existing error with formatted context.
+func WrapErrorf(err error, format string, args ...interface{}) error {
+	return fmt.Errorf(format+": %w", append(args, err)...)
+}
+
+// IsNotFoundError checks if the error is a "not found" error.
+func IsNotFoundError(err error) bool {
+	return errors.Is(err, ErrDatabaseNotFound) ||
+		errors.Is(err, ErrCollectionNotFound)
+}
+
+// IsConnectionError checks if the error is a connection error.
+func IsConnectionError(err error) bool {
+	return errors.Is(err, ErrNotConnected) ||
+		errors.Is(err, ErrConnectionFailed)
+}
+
+// IsValidationError checks if the error is a validation error.
+func IsValidationError(err error) bool {
+	return errors.Is(err, ErrDatabaseNameEmpty) ||
+		errors.Is(err, ErrCollectionNameEmpty) ||
+		errors.Is(err, ErrInvalidDimension) ||
+		errors.Is(err, ErrInvalidConfig) ||
+		errors.Is(err, ErrInvalidEmbedding)
 }

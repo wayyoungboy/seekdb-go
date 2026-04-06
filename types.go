@@ -69,3 +69,36 @@ type RankConfig struct {
 type RRFConfig struct {
 	K int // RRF parameter (default: 60)
 }
+
+// IncludeOptions controls which fields are included in query results.
+type IncludeOptions struct {
+	Documents  bool // Include document content
+	Embeddings bool // Include embedding vectors
+	Metadatas  bool // Include metadata
+	Distances  bool // Include distance scores (only for vector queries)
+}
+
+// DefaultInclude returns the default include options for queries.
+func DefaultInclude() IncludeOptions {
+	return IncludeOptions{
+		Documents:  true,
+		Embeddings: false,
+		Metadatas:  true,
+		Distances:  true,
+	}
+}
+
+// IncludeAll returns include options with all fields enabled.
+func IncludeAll() IncludeOptions {
+	return IncludeOptions{
+		Documents:  true,
+		Embeddings: true,
+		Metadatas:  true,
+		Distances:  true,
+	}
+}
+
+// IncludeNone returns include options with no fields enabled.
+func IncludeNone() IncludeOptions {
+	return IncludeOptions{}
+}

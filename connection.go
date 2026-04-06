@@ -44,7 +44,7 @@ func newClientConnection(config ClientConfig) (*Connection, error) {
 	}
 	if config.Host != "" {
 		// Server mode
-		return newServerConnection(config.Host, config.Port, config.User, config.Password, config.Tenant, config.Database)
+		return newServerConnectionWithOptions(config.Host, config.Port, config.User, config.Password, config.Tenant, config.Database, config.PoolConfig)
 	}
 	return nil, ErrInvalidConfig
 }
@@ -57,7 +57,7 @@ func newAdminConnection(config AdminConfig) (*Connection, error) {
 	}
 	if config.Host != "" {
 		// Server mode
-		return newServerConnection(config.Host, config.Port, config.User, config.Password, config.Tenant, "")
+		return newServerConnectionWithOptions(config.Host, config.Port, config.User, config.Password, config.Tenant, "", config.PoolConfig)
 	}
 	return nil, ErrInvalidConfig
 }
@@ -70,8 +70,13 @@ func newEmbeddedConnection(path string) (*Connection, error) {
 	return nil, ErrEmbeddedNotSupported
 }
 
-// newServerConnection creates a server mode connection.
+// newServerConnection creates a server mode connection (deprecated, use newServerConnectionWithOptions).
 func newServerConnection(host string, port int, user, password, tenant, database string) (*Connection, error) {
+	return newServerConnectionWithOptions(host, port, user, password, tenant, database, DefaultConnectionPoolConfig())
+}
+
+// newServerConnectionWithOptions creates a server mode connection with pool configuration.
+func newServerConnectionWithOptions(host string, port int, user, password, tenant, database string, poolConfig ConnectionPoolConfig) (*Connection, error) {
 	// Apply defaults
 	if port == 0 {
 		port = 2881
@@ -83,6 +88,11 @@ func newServerConnection(host string, port int, user, password, tenant, database
 		password = os.Getenv("SEEKDB_PASSWORD")
 	}
 
+	// Apply default pool config if needed
+	if poolConfig.MaxOpenConns == 0 {
+		poolConfig = DefaultConnectionPoolConfig()
+	}
+
 	// Build DSN
 	dsn := buildDSN(host, port, user, password, tenant, database)
 
@@ -92,8 +102,14 @@ func newServerConnection(host string, port int, user, password, tenant, database
 	}
 
 	// Configure connection pool
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
+	db.SetMaxOpenConns(poolConfig.MaxOpenConns)
+	db.SetMaxIdleConns(poolConfig.MaxIdleConns)
+	if poolConfig.ConnMaxLifetime > 0 {
+		db.SetConnMaxLifetime(poolConfig.ConnMaxLifetime)
+	}
+	if poolConfig.ConnMaxIdleTime > 0 {
+		db.SetConnMaxIdleTime(poolConfig.ConnMaxIdleTime)
+	}
 
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
