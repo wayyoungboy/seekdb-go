@@ -307,6 +307,6 @@ func (c *Client) buildCreateIndexSQL(name string, config CollectionConfig) strin
 
 	tableName := collectionTableName(name)
 	return fmt.Sprintf(
-		"CREATE VECTOR INDEX idx_embedding ON `%s` (embedding) WITH (distance = '%s', type = '%s')",
+		"CREATE VECTOR INDEX idx_embedding ON `%s` (embedding) WITH (distance = %s, type = %s)",
 		tableName, distance, indexType)
 }

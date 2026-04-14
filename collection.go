@@ -26,12 +26,12 @@ type CollectionConfig struct {
 
 // Name returns the collection name.
 func (c *Collection) Name() string {
-	return c.tableName()
+	return c.name
 }
 
 // tableName returns the internal table name with prefix.
 func (c *Collection) tableName() string {
-	return collectionTableName(c.tableName())
+	return collectionTableName(c.name)
 }
 
 // Add inserts new documents into the collection.
@@ -160,22 +160,46 @@ func (c *Collection) Upsert(ctx context.Context, params UpsertParams) error {
 
 		if exists {
 			// Update
+			var doc string
+			if i < len(params.Documents) {
+				doc = params.Documents[i]
+			}
+			var emb []float32
+			if i < len(params.Embeddings) {
+				emb = params.Embeddings[i]
+			}
+			var meta map[string]interface{}
+			if i < len(params.Metadatas) {
+				meta = params.Metadatas[i]
+			}
 			updateParams := UpdateParams{
 				IDs:        []string{id},
-				Documents:  []string{params.Documents[i]},
-				Embeddings: [][]float32{params.Embeddings[i]},
-				Metadatas:  []map[string]interface{}{params.Metadatas[i]},
+				Documents:  []string{doc},
+				Embeddings: [][]float32{emb},
+				Metadatas:  []map[string]interface{}{meta},
 			}
 			if err := c.Update(ctx, updateParams); err != nil {
 				return err
 			}
 		} else {
 			// Add
+			var doc string
+			if i < len(params.Documents) {
+				doc = params.Documents[i]
+			}
+			var emb []float32
+			if i < len(params.Embeddings) {
+				emb = params.Embeddings[i]
+			}
+			var meta map[string]interface{}
+			if i < len(params.Metadatas) {
+				meta = params.Metadatas[i]
+			}
 			addParams := AddParams{
 				IDs:        []string{id},
-				Documents:  []string{params.Documents[i]},
-				Embeddings: [][]float32{params.Embeddings[i]},
-				Metadatas:  []map[string]interface{}{params.Metadatas[i]},
+				Documents:  []string{doc},
+				Embeddings: [][]float32{emb},
+				Metadatas:  []map[string]interface{}{meta},
 			}
 			if err := c.Add(ctx, addParams); err != nil {
 				return err
@@ -278,6 +302,10 @@ func (c *Collection) Query(ctx context.Context, params QueryParams) (*QueryResul
 			selectFields, c.tableName(), whereClause)
 
 		args := []interface{}{vectorToSQL(queryEmb)}
+		if include.Distances {
+			// VECTOR_DISTANCE in SELECT also needs the query vector argument
+			args = append([]interface{}{vectorToSQL(queryEmb)}, args...)
+		}
 		args = append(args, nResults)
 
 		rows, err := c.client.db.QueryContext(ctx, query, args...)

@@ -85,7 +85,7 @@ func (c *Collection) vectorSearch(ctx context.Context, knnParams map[string]inte
 
 	query := fmt.Sprintf(
 		"SELECT id, document, embedding, metadata, VECTOR_DISTANCE(embedding, ?) as distance FROM `%s` WHERE %s ORDER BY distance ASC LIMIT ?",
-		c.name, whereClause)
+		c.tableName(), whereClause)
 
 	args := []interface{}{vectorToSQL(queryEmb), nResults}
 
@@ -140,7 +140,7 @@ func (c *Collection) textSearch(ctx context.Context, queryParams map[string]inte
 	// Use BM25 for full-text search (seekdb built-in)
 	query := fmt.Sprintf(
 		"SELECT id, document, embedding, metadata, BM25_SCORE() as score FROM `%s` WHERE MATCH(document) AGAINST(? IN NATURAL LANGUAGE MODE) AND %s ORDER BY score DESC LIMIT ?",
-		c.name, whereClause)
+		c.tableName(), whereClause)
 
 	args := []interface{}{queryText, nResults}
 
@@ -149,7 +149,7 @@ func (c *Collection) textSearch(ctx context.Context, queryParams map[string]inte
 		// If BM25 is not available, fall back to LIKE search
 		query = fmt.Sprintf(
 			"SELECT id, document, embedding, metadata, 1.0 as score FROM `%s` WHERE document LIKE ? AND %s LIMIT ?",
-			c.name, whereClause)
+			c.tableName(), whereClause)
 		args = []interface{}{fmt.Sprintf("%%%s%%", queryText), nResults}
 
 		rows, err = c.client.db.QueryContext(ctx, query, args...)
@@ -333,7 +333,7 @@ func rrfScore(rank int, k int) float32 {
 
 // CreateFulltextIndex creates a full-text index on the document column.
 func (c *Collection) CreateFulltextIndex(ctx context.Context) error {
-	query := fmt.Sprintf("CREATE FULLTEXT INDEX idx_document_ft ON `%s` (document)", c.name)
+	query := fmt.Sprintf("CREATE FULLTEXT INDEX idx_document_ft ON `%s` (document)", c.tableName())
 	_, err := c.client.db.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to create fulltext index: %w", err)

@@ -86,7 +86,7 @@ func (c *Collection) Modify(ctx context.Context, options ModifyOptions) error {
 	// If only index changed, we can just recreate the index
 	if options.VectorIndex != nil {
 		// Drop old index
-		dropIndexSQL := fmt.Sprintf("DROP INDEX idx_embedding ON `%s`", c.name)
+		dropIndexSQL := fmt.Sprintf("DROP INDEX idx_embedding ON `%s`", c.tableName())
 		_, err := c.client.db.ExecContext(ctx, dropIndexSQL)
 		if err != nil {
 			// Index might not exist, continue
