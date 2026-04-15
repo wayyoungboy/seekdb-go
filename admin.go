@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -18,6 +19,7 @@ type AdminClient struct {
 	connOnce  sync.Once
 	connErr   error
 	connected bool
+	embedded  *EmbeddedProcess // embedded seekdb process (if running)
 }
 
 // NewAdminClient creates a new AdminClient with the given configuration.
@@ -33,8 +35,10 @@ func NewAdminClient(config AdminConfig) (*AdminClient, error) {
 func (a *AdminClient) ensureConnection() error {
 	a.connOnce.Do(func() {
 		if a.config.Path != "" {
-			// Embedded mode - Linux only
-			a.connErr = ErrEmbeddedNotSupported
+			a.connErr = a.connectEmbedded()
+			if a.connErr == nil {
+				a.connected = true
+			}
 			return
 		}
 		if a.config.Host != "" {
@@ -45,6 +49,32 @@ func (a *AdminClient) ensureConnection() error {
 		}
 	})
 	return a.connErr
+}
+
+// connectEmbedded starts the embedded seekdb process and connects to it.
+func (a *AdminClient) connectEmbedded() error {
+	embCfg := a.config.EmbeddedConfig
+	embCfg.BaseDir = a.config.Path
+
+	ep, err := NewEmbeddedProcess(embCfg)
+	if err != nil {
+		return fmt.Errorf("failed to create embedded process: %w", err)
+	}
+
+	if err := ep.Start(60 * time.Second); err != nil {
+		return fmt.Errorf("failed to start embedded seekdb: %w", err)
+	}
+
+	a.embedded = ep
+
+	db, err := ep.ConnectAdmin(a.config.PoolConfig)
+	if err != nil {
+		ep.Stop()
+		return fmt.Errorf("failed to connect to embedded seekdb: %w", err)
+	}
+
+	a.db = db
+	return nil
 }
 
 // connectServer establishes the server connection.
@@ -97,9 +127,14 @@ func (a *AdminClient) connectServer() error {
 }
 
 // Close closes the AdminClient connection.
+// In embedded mode, this also stops the seekdb subprocess.
 func (a *AdminClient) Close() error {
 	if a.db != nil {
-		return a.db.Close()
+		a.db.Close()
+		a.db = nil
+	}
+	if a.embedded != nil {
+		return a.embedded.Stop()
 	}
 	return nil
 }

@@ -2,10 +2,22 @@
 
 > **Disclaimer**: This is a community-maintained project and is NOT officially affiliated with or endorsed by OceanBase. For the official SDKs, see [pyseekdb](https://github.com/oceanbase/pyseekdb) (Python) and [seekdb-js](https://github.com/oceanbase/seekdb-js) (JavaScript).
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/oceanbase/seekdb-go.svg)](https://pkg.go.dev/github.com/oceanbase/seekdb-go)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-
 A Go SDK for OceanBase seekdb, an AI-native search database that unifies relational, vector, text, JSON, and GIS data models.
+
+## Embedded Mode Status
+
+Embedded mode uses CGo bindings to `libseekdb.so` (same approach as pyseekdb/seekdb-js). Requires `libseekdb.so` and `seekdb.h` in the `libseekdb/` directory.
+
+**Known Issue**: When `AdminClient` and `Client` are used sequentially in embedded mode within the same process, the second `seekdb_close()` / `seekdb_open_with_service()` cycle may hang. This is a known issue with the C library's global state cleanup. Each embedded instance works correctly in isolation. See the test results:
+
+| Test | Status |
+|------|--------|
+| AdminClient (standalone) | PASS |
+| Client (standalone) | PASS |
+| AutoPort (standalone) | PASS |
+| AdminClient → Client (same process) | HANGS (known issue) |
+
+Server mode is fully functional and recommended for multi-client scenarios.
 
 ## Features
 
@@ -250,7 +262,62 @@ local := seekdb.NewLocalEmbeddingFunction(768, myEmbedFunc)
 
 ## Running Modes
 
-### Embedded Mode (Linux only)
+## Embedded Mode (Linux only)
+
+Embedded mode uses CGo bindings to `libseekdb.so` (same approach as pyseekdb/seekdb-js). The `libseekdb.so` binary is too large for GitHub (>100MB) and must be downloaded separately.
+
+### Setup
+
+1. Download and extract `libseekdb.so` + `seekdb.h`:
+
+```bash
+# Linux x64
+wget -O libseekdb-linux-x64.zip "https://oceanbase-seekdb-builds.s3.ap-southeast-1.amazonaws.com/libseekdb/all_commits/c1a508a4efed701b88d369c7bdcf2aa2ea3480bd/libseekdb-linux-x64.zip"
+unzip -o libseekdb-linux-x64.zip -d libseekdb/
+rm libseekdb-linux-x64.zip
+
+# Linux arm64
+wget -O libseekdb-linux-arm64.zip "https://oceanbase-seekdb-builds.s3.ap-southeast-1.amazonaws.com/libseekdb/all_commits/c1a508a4efed701b88d369c7bdcf2aa2ea3480bd/libseekdb-linux-arm64.zip"
+unzip -o libseekdb-linux-arm64.zip -d libseekdb/
+rm libseekdb-linux-arm64.zip
+```
+
+2. Ensure `libaio-dev` is installed:
+
+```bash
+sudo apt-get install -y libaio-dev
+```
+
+3. Build with CGo enabled:
+
+```bash
+CGO_ENABLED=1 go build ./...
+```
+
+### Usage
+
+```go
+client, _ := seekdb.NewClient(seekdb.ClientConfig{
+    Path:     "./data/seekdb",
+    Database: "mydb",
+})
+```
+
+### Known Issues
+
+- When `AdminClient` and `Client` are used sequentially in embedded mode within the same process, the second `seekdb_close()` / `seekdb_open_with_service()` cycle may hang. This is a known issue with the C library's global state cleanup. Each embedded instance works correctly in isolation.
+- Test results:
+
+| Test | Status |
+|------|--------|
+| AdminClient (standalone) | PASS |
+| Client (standalone) | PASS |
+| AutoPort (standalone) | PASS |
+| AdminClient → Client (same process) | HANGS |
+
+Server mode is fully functional and recommended for multi-client scenarios.
+
+### Server Mode (All platforms)
 
 ```go
 client, _ := seekdb.NewClient(seekdb.ClientConfig{

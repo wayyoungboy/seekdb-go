@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -39,6 +40,7 @@ type Client struct {
 	connOnce  sync.Once
 	connErr   error
 	connected bool
+	embedded  *EmbeddedProcess // embedded seekdb process (if running)
 }
 
 // NewClient creates a new Client with the given configuration.
@@ -54,7 +56,10 @@ func NewClient(config ClientConfig) (*Client, error) {
 func (c *Client) ensureConnection() error {
 	c.connOnce.Do(func() {
 		if c.config.Path != "" {
-			c.connErr = ErrEmbeddedNotSupported
+			c.connErr = c.connectEmbedded()
+			if c.connErr == nil {
+				c.connected = true
+			}
 			return
 		}
 		if c.config.Host != "" {
@@ -65,6 +70,39 @@ func (c *Client) ensureConnection() error {
 		}
 	})
 	return c.connErr
+}
+
+// connectEmbedded starts the embedded seekdb process and connects to it.
+func (c *Client) connectEmbedded() error {
+	// Build embedded config
+	embCfg := c.config.EmbeddedConfig
+	embCfg.BaseDir = c.config.Path
+
+	ep, err := NewEmbeddedProcess(embCfg)
+	if err != nil {
+		return fmt.Errorf("failed to create embedded process: %w", err)
+	}
+
+	if err := ep.Start(60 * time.Second); err != nil {
+		return fmt.Errorf("failed to start embedded seekdb: %w", err)
+	}
+
+	c.embedded = ep
+
+	// Connect to the embedded instance
+	c.database = c.config.Database
+	if c.database == "" {
+		c.database = "test"
+	}
+
+	db, err := ep.Connect(c.database, c.config.PoolConfig)
+	if err != nil {
+		ep.Stop()
+		return fmt.Errorf("failed to connect to embedded seekdb: %w", err)
+	}
+
+	c.db = db
+	return nil
 }
 
 // connectServer establishes the server connection.
@@ -123,9 +161,14 @@ func (c *Client) connectServer() error {
 }
 
 // Close closes the Client connection.
+// In embedded mode, this also stops the seekdb subprocess.
 func (c *Client) Close() error {
 	if c.db != nil {
-		return c.db.Close()
+		c.db.Close()
+		c.db = nil
+	}
+	if c.embedded != nil {
+		return c.embedded.Stop()
 	}
 	return nil
 }

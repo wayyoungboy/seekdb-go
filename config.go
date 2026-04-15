@@ -72,6 +72,9 @@ type ClientConfig struct {
 	Tenant   string // Tenant name (OceanBase Database only)
 	Database string // Database name
 
+	// Embedded mode settings (only used when Path is set)
+	EmbeddedConfig EmbeddedConfig // Advanced embedded mode configuration
+
 	// Connection pool settings
 	PoolConfig ConnectionPoolConfig
 }
@@ -87,6 +90,9 @@ type AdminConfig struct {
 	User     string // Username (default: "root")
 	Password string // Password (can be from SEEKDB_PASSWORD env var)
 	Tenant   string // Tenant name (OceanBase Database only)
+
+	// Embedded mode settings (only used when Path is set)
+	EmbeddedConfig EmbeddedConfig // Advanced embedded mode configuration
 
 	// Connection pool settings
 	PoolConfig ConnectionPoolConfig
