@@ -1,5 +1,7 @@
 # seekdb-go
 
+> **Disclaimer**: This is a community-maintained project and is NOT officially affiliated with or endorsed by OceanBase. For the official SDKs, see [pyseekdb](https://github.com/oceanbase/pyseekdb) (Python) and [seekdb-js](https://github.com/oceanbase/seekdb-js) (JavaScript).
+
 [![Go Reference](https://pkg.go.dev/badge/github.com/oceanbase/seekdb-go.svg)](https://pkg.go.dev/github.com/oceanbase/seekdb-go)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
