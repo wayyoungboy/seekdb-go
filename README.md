@@ -6,9 +6,11 @@ A Go SDK for OceanBase seekdb, an AI-native search database that unifies relatio
 
 ## Embedded Mode Status
 
-Embedded mode uses CGo bindings to `libseekdb.so` (same approach as pyseekdb/seekdb-js). Requires `libseekdb.so` and `seekdb.h` in the `libseekdb/` directory.
+Embedded mode uses CGo bindings to `libseekdb.so` (same approach as pyseekdb/seekdb-js). The CGo implementation is complete and aligned with pyseekdb's singleton pattern (single open, no close, reference counting).
 
-**Known Issue**: When `AdminClient` and `Client` are used sequentially in embedded mode within the same process, the second `seekdb_close()` / `seekdb_open_with_service()` cycle may hang. This is a known issue with the C library's global state cleanup. Each embedded instance works correctly in isolation. See the test results:
+**Blocker**: `libseekdb.so` is not currently obtainable — the S3 download URL returns 403, RPM/DEB packages contain only the server binary, and pyseekdb wheels bundle the engine statically. See the full Embedded Mode section below for details.
+
+Individual embedded tests pass when run in isolation:
 
 | Test | Status |
 |------|--------|
@@ -17,7 +19,7 @@ Embedded mode uses CGo bindings to `libseekdb.so` (same approach as pyseekdb/see
 | AutoPort (standalone) | PASS |
 | AdminClient → Client (same process) | HANGS (known issue) |
 
-Server mode is fully functional and recommended for multi-client scenarios.
+Server mode is fully functional and recommended for production use.
 
 ## Features
 
@@ -262,11 +264,21 @@ local := seekdb.NewLocalEmbeddingFunction(768, myEmbedFunc)
 
 ## Running Modes
 
-## Embedded Mode (Linux only)
+## Embedded Mode (Linux only, CGo)
 
-Embedded mode uses CGo bindings to `libseekdb.so` (same approach as pyseekdb/seekdb-js). The `libseekdb.so` binary is too large for GitHub (>100MB) and must be downloaded separately.
+Embedded mode uses CGo bindings to `libseekdb.so` (same approach as pyseekdb/seekdb-js). The `libseekdb.so` binary is too large for GitHub (>100MB) and must be obtained separately.
 
-### Setup
+### Current Status
+
+The CGo implementation is complete and aligned with pyseekdb's singleton pattern. However, obtaining `libseekdb.so` is currently blocked:
+
+- **S3 URL returns 403** — the official download URL is no longer publicly accessible
+- **RPM/DEB packages only contain the server binary**, not the embedded library
+- **pyseekdb wheels** bundle the engine statically as a Python C extension (not usable for CGo)
+
+To use embedded mode, you must obtain `libseekdb.so` from the S3 URL (see below) and place it in `libseekdb/`.
+
+### Setup (if you can download libseekdb.so)
 
 1. Download and extract `libseekdb.so` + `seekdb.h`:
 
@@ -275,11 +287,6 @@ Embedded mode uses CGo bindings to `libseekdb.so` (same approach as pyseekdb/see
 wget -O libseekdb-linux-x64.zip "https://oceanbase-seekdb-builds.s3.ap-southeast-1.amazonaws.com/libseekdb/all_commits/c1a508a4efed701b88d369c7bdcf2aa2ea3480bd/libseekdb-linux-x64.zip"
 unzip -o libseekdb-linux-x64.zip -d libseekdb/
 rm libseekdb-linux-x64.zip
-
-# Linux arm64
-wget -O libseekdb-linux-arm64.zip "https://oceanbase-seekdb-builds.s3.ap-southeast-1.amazonaws.com/libseekdb/all_commits/c1a508a4efed701b88d369c7bdcf2aa2ea3480bd/libseekdb-linux-arm64.zip"
-unzip -o libseekdb-linux-arm64.zip -d libseekdb/
-rm libseekdb-linux-arm64.zip
 ```
 
 2. Ensure `libaio-dev` is installed:
@@ -305,8 +312,8 @@ client, _ := seekdb.NewClient(seekdb.ClientConfig{
 
 ### Known Issues
 
-- When `AdminClient` and `Client` are used sequentially in embedded mode within the same process, the second `seekdb_close()` / `seekdb_open_with_service()` cycle may hang. This is a known issue with the C library's global state cleanup. Each embedded instance works correctly in isolation.
-- Test results:
+- When `AdminClient` and `Client` are used sequentially in embedded mode within the same process, the second client creation may hang. This is a known issue with the C library's global state management. Each embedded instance works correctly in isolation.
+- Individual test results (all PASS when run in isolation):
 
 | Test | Status |
 |------|--------|
@@ -315,16 +322,7 @@ client, _ := seekdb.NewClient(seekdb.ClientConfig{
 | AutoPort (standalone) | PASS |
 | AdminClient → Client (same process) | HANGS |
 
-Server mode is fully functional and recommended for multi-client scenarios.
-
-### Server Mode (All platforms)
-
-```go
-client, _ := seekdb.NewClient(seekdb.ClientConfig{
-    Path:     "./data/seekdb",
-    Database: "mydb",
-})
-```
+Server mode is fully functional and recommended for production use.
 
 ### Server Mode (All platforms)
 
