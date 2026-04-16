@@ -24,7 +24,7 @@ jobs:
           go-version: "1.22"
 
       - name: Go cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/go/pkg/mod
@@ -71,7 +71,7 @@ jobs:
           go-version: ${{ matrix.go-version }}
 
       - name: Go cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/go/pkg/mod
@@ -115,7 +115,7 @@ jobs:
         run: brew install gcc
 
       - name: Go cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/go/pkg/mod
@@ -142,7 +142,7 @@ jobs:
           go-version: "1.22"
 
       - name: Go cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/go/pkg/mod
