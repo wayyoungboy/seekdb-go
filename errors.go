@@ -11,6 +11,7 @@ var (
 	ErrNotConnected         = errors.New("not connected to seekdb")
 	ErrConnectionFailed     = errors.New("failed to connect to seekdb")
 	ErrEmbeddedNotSupported = errors.New("embedded mode not supported on this platform")
+	ErrBinaryNotFound       = errors.New("seekdb binary not found: set SEEKDB_BINARY_PATH env var or EmbeddedConfig.BinaryPath")
 
 	// Database errors
 	ErrDatabaseNotFound  = errors.New("database not found")

@@ -3,52 +3,39 @@ package seekdb
 import (
 	"database/sql"
 	"fmt"
+	"io"
 	"net"
+	"os"
+	"os/exec"
 	"sync"
+	"syscall"
 	"time"
-
-	_ "github.com/go-sql-driver/mysql"
 )
-
-// globalSeekdb tracks the singleton seekdb embedded instance state.
-// Aligned with pyseekdb: seekdb.open() is called once and never explicitly
-// closed. seekdb_close() clears global state and breaks subsequent opens.
-var globalSeekdb = struct {
-	mu       sync.Mutex
-	path     string
-	opened   bool
-	port     int
-	refCount int
-}{
-	path:     "",
-	opened:   false,
-	port:     0,
-	refCount: 0,
-}
-
-// EmbeddedProcess manages a seekdb instance running in embedded mode.
-// Uses native CGo bindings to libseekdb.so (matching pyseekdb/seekdb-js).
-//
-// Aligned with pyseekdb's SeekdbEmbeddedClient: multiple EmbeddedProcess
-// instances share the same underlying seekdb engine via a global singleton.
-// seekdb.open() is called once; subsequent opens are skipped.
-// Close() only decrements the reference count and closes connection handles;
-// seekdb_close() is never called to avoid breaking the global state.
-type EmbeddedProcess struct {
-	mu      sync.Mutex
-	baseDir string
-	port    int
-	started bool
-	stopped bool
-}
 
 // EmbeddedConfig holds configuration for starting seekdb in embedded mode.
 type EmbeddedConfig struct {
-	BinaryPath  string            // Deprecated: native CGo mode doesn't use binary. Kept for API compatibility.
+	BinaryPath  string            // Path to the seekdb binary (required)
 	BaseDir     string            // Data directory for seekdb
 	Port        int               // Port to listen on (0 = auto-assign)
-	ExtraParams map[string]string // Additional parameters (not used in native mode)
-	LogLevel    string            // Log level (not used in native mode)
+	ExtraParams map[string]string // Additional command-line parameters passed to the seekdb binary
+	LogLevel    string            // Log level for the seekdb subprocess (e.g., INFO, DEBUG)
+}
+
+// EmbeddedProcess manages a seekdb instance running as a subprocess.
+// Starts the seekdb binary as a child process and connects via MySQL protocol.
+type EmbeddedProcess struct {
+	mu          sync.Mutex
+	baseDir     string
+	port        int
+	binary      string
+	extraParams map[string]string
+	logLevel    string
+	cmd         *exec.Cmd
+	stderr      io.ReadCloser
+	started     bool
+	stopped     bool
+	done        chan struct{}
+	exitErr     error
 }
 
 // NewEmbeddedProcess creates a new EmbeddedProcess with the given configuration.
@@ -57,24 +44,37 @@ func NewEmbeddedProcess(cfg EmbeddedConfig) (*EmbeddedProcess, error) {
 		return nil, fmt.Errorf("BaseDir is required for embedded mode")
 	}
 
-	port := cfg.Port
-	if port == 0 {
-		// Auto-assign a free port
+	binary := cfg.BinaryPath
+	if binary == "" {
+		binary = os.Getenv(EnvBinaryPath)
+	}
+	if binary == "" {
 		var err error
-		port, err = findFreePort()
+		binary, err = exec.LookPath("seekdb")
+		if err != nil {
+			return nil, ErrBinaryNotFound
+		}
+	}
+
+	p := cfg.Port
+	if p == 0 {
+		var err error
+		p, err = findFreePort()
 		if err != nil {
 			return nil, fmt.Errorf("failed to find free port: %w", err)
 		}
 	}
 
 	return &EmbeddedProcess{
-		baseDir: cfg.BaseDir,
-		port:    port,
+		baseDir:     cfg.BaseDir,
+		port:        p,
+		binary:      binary,
+		extraParams: cfg.ExtraParams,
+		logLevel:    cfg.LogLevel,
 	}, nil
 }
 
-// Start initializes the seekdb embedded instance via CGo.
-// If another EmbeddedProcess has already started seekdb, this reuses the existing instance.
+// Start launches the seekdb subprocess and waits for it to accept connections.
 func (ep *EmbeddedProcess) Start(timeout time.Duration) error {
 	ep.mu.Lock()
 	defer ep.mu.Unlock()
@@ -83,54 +83,37 @@ func (ep *EmbeddedProcess) Start(timeout time.Duration) error {
 		return nil
 	}
 
-	// Acquire global lock to manage singleton state
-	globalSeekdb.mu.Lock()
-	defer globalSeekdb.mu.Unlock()
+	args := ep.buildArgs()
 
-	if !globalSeekdb.opened {
-		// First caller: actually open seekdb
-		cfg := NativeEmbeddedConfig{
-			BaseDir: ep.baseDir,
-			Port:    ep.port,
-		}
+	ep.cmd = exec.Command(ep.binary, args...)
 
-		native, err := NewNativeEmbeddedConn(cfg)
-		if err != nil {
-			return fmt.Errorf("failed to create native embedded connection: %w", err)
-		}
+	stderrPipe, err := ep.cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+	ep.stderr = stderrPipe
 
-		if err := native.Open(); err != nil {
-			return fmt.Errorf("failed to open seekdb: %w", err)
-		}
+	ep.done = make(chan struct{})
+	go func() {
+		defer close(ep.done)
+		io.Copy(os.Stderr, stderrPipe)
+	}()
 
-		globalSeekdb.path = ep.baseDir
-		globalSeekdb.port = ep.port
-		globalSeekdb.opened = true
-	} else {
-		// Already opened: verify the path matches
-		if globalSeekdb.path != ep.baseDir {
-			return fmt.Errorf("seekdb already opened with different path: %s (current: %s). "+
-				"Multiple embedded instances in the same process are not supported",
-				globalSeekdb.path, ep.baseDir)
-		}
+	if err := ep.cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start seekdb process: %w", err)
 	}
 
-	globalSeekdb.refCount++
-	ep.started = true
-	ep.port = globalSeekdb.port
-
-	// Wait for seekdb to be ready on the network port
 	if err := ep.waitForReady(timeout); err != nil {
-		globalSeekdb.refCount--
-		ep.started = false
+		ep.cmd.Process.Kill()
+		ep.exitErr = err
 		return fmt.Errorf("seekdb failed to become ready: %w", err)
 	}
 
+	ep.started = true
 	return nil
 }
 
-// Stop decrements the reference count. The last caller would need to clean up,
-// but we skip seekdb_close() to match pyseekdb behavior (it's never called).
+// Stop terminates the seekdb subprocess.
 func (ep *EmbeddedProcess) Stop() error {
 	ep.mu.Lock()
 	defer ep.mu.Unlock()
@@ -139,13 +122,20 @@ func (ep *EmbeddedProcess) Stop() error {
 		return nil
 	}
 
-	globalSeekdb.mu.Lock()
-	globalSeekdb.refCount--
-	globalSeekdb.mu.Unlock()
+	if ep.cmd != nil && ep.cmd.Process != nil {
+		ep.cmd.Process.Signal(syscall.SIGTERM)
+
+		select {
+		case <-ep.done:
+		case <-time.After(5 * time.Second):
+			ep.cmd.Process.Kill()
+			<-ep.done
+		}
+	}
 
 	ep.stopped = true
 	ep.started = false
-	return nil
+	return ep.exitErr
 }
 
 // Port returns the port the embedded seekdb is listening on.
@@ -158,25 +148,16 @@ func (ep *EmbeddedProcess) BaseDir() string {
 	return ep.baseDir
 }
 
+// Binary returns the resolved binary path.
+func (ep *EmbeddedProcess) Binary() string {
+	return ep.binary
+}
+
 // IsRunning returns true if the instance is running.
 func (ep *EmbeddedProcess) IsRunning() bool {
 	ep.mu.Lock()
 	defer ep.mu.Unlock()
 	return ep.started && !ep.stopped
-}
-
-// IsGlobalRunning returns true if the global seekdb instance is opened.
-func IsGlobalRunning() bool {
-	globalSeekdb.mu.Lock()
-	defer globalSeekdb.mu.Unlock()
-	return globalSeekdb.opened
-}
-
-// GlobalPort returns the port of the global seekdb instance.
-func GlobalPort() int {
-	globalSeekdb.mu.Lock()
-	defer globalSeekdb.mu.Unlock()
-	return globalSeekdb.port
 }
 
 // Connect opens a MySQL connection to the embedded seekdb instance.
@@ -185,11 +166,7 @@ func (ep *EmbeddedProcess) Connect(database string, poolConfig ConnectionPoolCon
 		return nil, ErrNotConnected
 	}
 
-	globalSeekdb.mu.Lock()
-	port := globalSeekdb.port
-	globalSeekdb.mu.Unlock()
-
-	dsn := fmt.Sprintf("root:@tcp(127.0.0.1:%d)/%s", port, database)
+	dsn := fmt.Sprintf("root:@tcp(127.0.0.1:%d)/%s", ep.port, database)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open connection: %w", err)
@@ -221,11 +198,7 @@ func (ep *EmbeddedProcess) ConnectAdmin(poolConfig ConnectionPoolConfig) (*sql.D
 		return nil, ErrNotConnected
 	}
 
-	globalSeekdb.mu.Lock()
-	port := globalSeekdb.port
-	globalSeekdb.mu.Unlock()
-
-	dsn := fmt.Sprintf("root:@tcp(127.0.0.1:%d)/", port)
+	dsn := fmt.Sprintf("root:@tcp(127.0.0.1:%d)/", ep.port)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open connection: %w", err)
@@ -251,6 +224,24 @@ func (ep *EmbeddedProcess) ConnectAdmin(poolConfig ConnectionPoolConfig) (*sql.D
 	return db, nil
 }
 
+// buildArgs constructs command-line arguments for the seekdb subprocess.
+func (ep *EmbeddedProcess) buildArgs() []string {
+	args := []string{
+		"--datadir=" + ep.baseDir,
+		"--port=" + fmt.Sprintf("%d", ep.port),
+	}
+
+	if ep.logLevel != "" {
+		args = append(args, "--log-level="+ep.logLevel)
+	}
+
+	for key, value := range ep.extraParams {
+		args = append(args, "--"+key+"="+value)
+	}
+
+	return args
+}
+
 // waitForReady polls until seekdb responds on the network port or timeout.
 func (ep *EmbeddedProcess) waitForReady(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
@@ -262,6 +253,11 @@ func (ep *EmbeddedProcess) waitForReady(timeout time.Duration) error {
 		case <-ticker.C:
 			if time.Now().After(deadline) {
 				return fmt.Errorf("timed out waiting for seekdb to be ready on port %d", ep.port)
+			}
+
+			// Check if process already exited
+			if ep.cmd != nil && ep.cmd.ProcessState != nil && ep.cmd.ProcessState.Exited() {
+				return fmt.Errorf("seekdb process exited unexpectedly (exit code: %d)", ep.cmd.ProcessState.ExitCode())
 			}
 
 			// Check TCP connectivity

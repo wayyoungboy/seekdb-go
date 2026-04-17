@@ -23,6 +23,9 @@ const (
 	EnvTenant   = "SEEKDB_TENANT"
 	EnvDatabase = "SEEKDB_DATABASE"
 
+	// Embedded mode
+	EnvBinaryPath = "SEEKDB_BINARY_PATH"
+
 	// Embedding API keys
 	EnvOpenAIAPIKey   = "OPENAI_API_KEY"
 	EnvCohereAPIKey   = "COHERE_API_KEY"
@@ -73,7 +76,7 @@ type ClientConfig struct {
 	Database string // Database name
 
 	// Embedded mode settings (only used when Path is set)
-	EmbeddedConfig EmbeddedConfig // Advanced embedded mode configuration
+	EmbeddedConfig EmbeddedConfig // Advanced embedded mode configuration (binary path, port, log level)
 
 	// Connection pool settings
 	PoolConfig ConnectionPoolConfig
@@ -92,7 +95,7 @@ type AdminConfig struct {
 	Tenant   string // Tenant name (OceanBase Database only)
 
 	// Embedded mode settings (only used when Path is set)
-	EmbeddedConfig EmbeddedConfig // Advanced embedded mode configuration
+	EmbeddedConfig EmbeddedConfig // Advanced embedded mode configuration (binary path, port, log level)
 
 	// Connection pool settings
 	PoolConfig ConnectionPoolConfig
